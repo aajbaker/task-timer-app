@@ -1,14 +1,15 @@
+import { Routes, Route } from 'react-router-dom';
+import { AppProvider } from './AppContext';
 import HomePage from './HomePage';
 import StatsPage from './StatsPage';
-import { Routes, Route } from 'react-router-dom';
 
-function App() {
+export default function App() {
   return (
-    <Routes>
-      <Route path="/" element={<HomePage />} />
-      <Route path="/stats" element={<StatsPage />} />
-    </Routes>
+    <AppProvider>
+      <Routes>
+        <Route path="/" element={<HomePage />} />
+        <Route path="/stats" element={<StatsPage />} />
+      </Routes>
+    </AppProvider>
   );
 }
-
-export default App;

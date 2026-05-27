@@ -1,242 +1,95 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
+import { useCategories, useSessions } from './AppContext';
+import { getContrastColor } from './utils';
+import chimeSound from './assets/chime-sound-7143.mp3';
 
-const HomePage = () => {
-  // Helper to get initial categories with color
-  const getInitialCategories = () => {
-    const stored = localStorage.getItem('categories');
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      // Migrate string array to object array if needed
-      if (Array.isArray(parsed) && typeof parsed[0] === 'string') {
-        return parsed.map(name => ({ name, color: '#1976d2' }));
-      }
-      return parsed;
-    }
-    return [{ name: 'General', color: '#1976d2' }];
-  };
-  const getInitialCategory = () => {
-    const stored = localStorage.getItem('category');
-    return stored ? stored : 'General';
-  };
+const PRESET_COLORS = ['#1976d2', '#388e3c', '#d32f2f', '#7b1fa2', '#e65100', '#0097a7'];
 
-  // Helper to get initial timer state from localStorage
-  const getInitialTimerState = () => {
-    const saved = localStorage.getItem('timerState');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {}
-    }
-    return {};
-  };
-  const initialTimerState = getInitialTimerState();
+function getSavedTimer() {
+  try { return JSON.parse(localStorage.getItem('timerState')) || {}; }
+  catch { return {}; }
+}
 
-  const [time, setTime] = useState(
-    typeof initialTimerState.time === 'number' ? initialTimerState.time : 30 * 60
-  );
-  const [isRunning, setIsRunning] = useState(
-    typeof initialTimerState.isRunning === 'boolean' ? initialTimerState.isRunning : false
-  );
-  const [editingTime, setEditingTime] = useState(false);
-  const [inputMinutes, setInputMinutes] = useState(Math.floor(time / 60));
-  const [inputSeconds, setInputSeconds] = useState(time % 60);
-  const [menuOpen, setMenuOpen] = useState(null); // which category's menu is open
-  const [colorMenuOpen, setColorMenuOpen] = useState(null); // which category's color menu is open
-  const [endTime, setEndTime] = useState(
-    typeof initialTimerState.endTime === 'number' ? initialTimerState.endTime : null
-  );
-  const [lastSetTime, setLastSetTime] = useState(
-    typeof initialTimerState.lastSetTime === 'number' ? initialTimerState.lastSetTime : 30 * 60
-  );
+export default function HomePage() {
+  const { categories, setCategories, getCategoryColor, activeCategory: category, setActiveCategory: setCategory } = useCategories();
+  const { addSession } = useSessions();
+
+  // ── Timer state ──────────────────────────────────────────────────────
+  const saved = getSavedTimer();
+  const [time, setTime] = useState(saved.time ?? 30 * 60);
+  const [isRunning, setIsRunning] = useState(false);
+  const [endTime, setEndTime] = useState(null);
+  const [lastSetTime, setLastSetTime] = useState(saved.lastSetTime ?? 30 * 60);
   const [sessionStart, setSessionStart] = useState(null);
-  const [categories, setCategories] = useState(getInitialCategories);
-  const [category, setCategory] = useState(
-    initialTimerState.category || getInitialCategory()
-  );
-  const [addingCategory, setAddingCategory] = useState(false);
-  const [newCategory, setNewCategory] = useState("");
-  const [newCategoryColor, setNewCategoryColor] = useState('#1976d2');
-  const minutesInputRef = useRef(null);
-  const newCategoryInputRef = useRef(null);
-  const defaultColors = ['#1976d2', '#388e3c', '#fbc02d', '#d32f2f', '#7b1fa2'];
-  const audioRef = useRef(null);
-  const navigate = useNavigate();
-  const location = useLocation();
-  const isStats = location.pathname === '/stats';
 
-  // Helper to log a session
-  const logSession = (endType = 'complete') => {
+  // ── Timer editing ────────────────────────────────────────────────────
+  const [editingTime, setEditingTime] = useState(false);
+  const [inputMins, setInputMins] = useState(Math.floor(time / 60));
+  const [inputSecs, setInputSecs] = useState('00');
+  const minutesRef = useRef(null);
+
+  // ── Category editing ─────────────────────────────────────────────────
+  const [colorPickerFor, setColorPickerFor] = useState(null);
+  const [addingCategory, setAddingCategory] = useState(false);
+  const [newCatName, setNewCatName] = useState('');
+  const [newCatColor, setNewCatColor] = useState(PRESET_COLORS[0]);
+  const newCatRef = useRef(null);
+
+  // ── Audio ─────────────────────────────────────────────────────────────
+  const audioRef = useRef(null);
+
+  // ── Derived theming ───────────────────────────────────────────────────
+  const bgColor = getCategoryColor(category);
+  const fg = getContrastColor(bgColor);
+
+  // ── Stale-closure-safe session logger ─────────────────────────────────
+  // Reassigned every render so it always closes over fresh state.
+  const logSessionRef = useRef(null);
+  logSessionRef.current = (endType) => {
     if (!sessionStart) return;
-    const end = Date.now();
-    const start = sessionStart;
-    const duration = Math.round((end - start) / 1000); // in seconds
-    const dateObj = new Date(start);
-    const dayOfWeek = dateObj.getDay(); // 0=Sun
-    const session = {
-      start,
-      end,
-      duration,
-      dayOfWeek,
+    addSession({
+      start: sessionStart,
+      end: Date.now(),
+      duration: Math.round((Date.now() - sessionStart) / 1000),
+      dayOfWeek: new Date(sessionStart).getDay(),
       category,
       endType,
-    };
-    let sessions = [];
-    try {
-      sessions = JSON.parse(localStorage.getItem('sessions')) || [];
-    } catch {}
-    sessions.push(session);
-    localStorage.setItem('sessions', JSON.stringify(sessions));
+    });
+    setSessionStart(null);
   };
 
+  // ── Persist minimal timer state ───────────────────────────────────────
   useEffect(() => {
-    let interval;
-    if (isRunning && endTime) {
-      interval = setInterval(() => {
-        const remaining = Math.max(0, Math.round((endTime - Date.now()) / 1000));
-        setTime(remaining);
-        if (remaining === 0) {
-          // Play chime and show notification here
-          let played = false;
-          if (audioRef.current) {
-            audioRef.current.currentTime = 0;
-            audioRef.current.play().then(() => { played = true; }).catch(() => {});
-          }
-          setTimeout(() => { if (!played) playBeep(); }, 300);
-          if (window.Notification && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
-            new Notification('Time is up!', { body: 'Your timer has finished.' });
-          }
-          logSession('complete');
-          setIsRunning(false);
-          setEndTime(null);
-          setTime(lastSetTime); // Reset to last set time
-        }
-      }, 200);
-    }
-    return () => clearInterval(interval);
-  }, [isRunning, endTime]);
+    localStorage.setItem('timerState', JSON.stringify({ time, lastSetTime }));
+  }, [time, lastSetTime]);
 
-  // When timer is reset or edited, clear endTime
+  // ── Page title ────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!isRunning) setEndTime(null);
-  }, [isRunning]);
-
-  useEffect(() => {
-    document.title = formatTime();
+    const m = Math.floor(time / 60);
+    const s = (time % 60).toString().padStart(2, '0');
+    document.title = `${m}:${s}`;
   }, [time]);
 
+  // ── Body background ───────────────────────────────────────────────────
   useEffect(() => {
-    if (editingTime && minutesInputRef.current) {
-      minutesInputRef.current.focus();
-      minutesInputRef.current.select();
+    document.body.style.background = bgColor;
+    return () => { document.body.style.background = ''; };
+  }, [bgColor]);
+
+  // ── Focus effects ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (editingTime && minutesRef.current) {
+      minutesRef.current.focus();
+      minutesRef.current.select();
     }
   }, [editingTime]);
 
   useEffect(() => {
-    if (addingCategory && newCategoryInputRef.current) {
-      newCategoryInputRef.current.focus();
-    }
+    if (addingCategory && newCatRef.current) newCatRef.current.focus();
   }, [addingCategory]);
 
-  // Save categories and category to localStorage when they change
-  useEffect(() => {
-    localStorage.setItem('categories', JSON.stringify(categories));
-  }, [categories]);
-
-  useEffect(() => {
-    localStorage.setItem('category', category);
-  }, [category]);
-
-  // Persist timer state to localStorage on change
-  useEffect(() => {
-    localStorage.setItem('timerState', JSON.stringify({
-      time,
-      isRunning,
-      endTime,
-      category,
-      lastSetTime
-    }));
-  }, [time, isRunning, endTime, category, lastSetTime]);
-
-  // Sync body background color with timer background
-  useEffect(() => {
-    document.body.style.background = getCategoryColor(category);
-    return () => {
-      document.body.style.background = '';
-    };
-  }, [category, categories]);
-
-  // Get color for current category
-  const getCategoryColor = (catName) => {
-    const cat = categories.find(c => c.name === catName);
-    return cat ? cat.color : '#1976d2';
-  };
-
-  const formatTime = () => {
-    const minutes = Math.floor(time / 60);
-    const seconds = time % 60;
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-  };
-
-  const handleTimeClick = () => {
-    if (isRunning) return;
-    setInputMinutes(Math.floor(time / 60));
-    setInputSeconds('00'); // Always reset seconds to 00 when editing
-    setEditingTime(true);
-  };
-
-  const handleMinutesChange = (e) => {
-    setInputMinutes(e.target.value.replace(/[^0-9]/g, ''));
-  };
-
-  const handleSecondsChange = (e) => {
-    let value = e.target.value.replace(/[^0-9]/g, '');
-    if (parseInt(value, 10) > 59) value = '59';
-    if (value.length > 2) value = value.slice(0, 2);
-    if (value.length === 1) value = '0' + value;
-    setInputSeconds(value);
-  };
-
-  const handleTimeInputBlur = () => {
-    const minutes = parseInt(inputMinutes, 10) || 0;
-    const seconds = parseInt(inputSeconds, 10) || 0;
-    if (minutes > 0 || seconds > 0) {
-      const newTime = minutes * 60 + seconds;
-      setTime(newTime);
-      setLastSetTime(newTime); // Only update here
-    }
-    setEditingTime(false);
-  };
-
-  const handleTimeInputKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      handleTimeInputBlur();
-    } else if (e.key === 'Escape') {
-      setEditingTime(false);
-    }
-  };
-
-  // Close menu on outside click
-  useEffect(() => {
-    const handleClick = (e) => {
-      if (!e.target.closest('.cat-menu-btn') && !e.target.closest('.cat-menu')) {
-        setMenuOpen(null);
-      }
-    };
-    if (menuOpen !== null) {
-      document.addEventListener('mousedown', handleClick);
-    }
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [menuOpen]);
-
-  // Request notification permission on mount
-  useEffect(() => {
-    if (window.Notification && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
-  }, []);
-
-  // Unlock audio on first user interaction
+  // ── Unlock audio on first interaction ────────────────────────────────
   useEffect(() => {
     const unlock = () => {
       if (audioRef.current) {
@@ -250,7 +103,54 @@ const HomePage = () => {
     return () => window.removeEventListener('pointerdown', unlock);
   }, []);
 
-  // Helper: Web Audio API beep fallback
+  // ── Notification permission ───────────────────────────────────────────
+  useEffect(() => {
+    if (window.Notification?.permission === 'default') Notification.requestPermission();
+  }, []);
+
+  // ── Countdown ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isRunning || !endTime) return;
+    const id = setInterval(() => {
+      const remaining = Math.max(0, Math.round((endTime - Date.now()) / 1000));
+      setTime(remaining);
+      if (remaining === 0) {
+        clearInterval(id);
+        playChime();
+        if (window.Notification?.permission === 'granted' && document.visibilityState !== 'visible') {
+          new Notification('Time is up!', { body: 'Your timer has finished.' });
+        }
+        logSessionRef.current('complete');
+        setIsRunning(false);
+        setEndTime(null);
+        setTime(lastSetTime);
+      }
+    }, 200);
+    return () => clearInterval(id);
+  }, [isRunning, endTime, lastSetTime]);
+
+  // ── Dismiss color picker on outside click ─────────────────────────────
+  useEffect(() => {
+    if (!colorPickerFor) return;
+    const dismiss = (e) => {
+      if (!e.target.closest('.color-popover') && !e.target.closest('.color-dot')) {
+        setColorPickerFor(null);
+      }
+    };
+    document.addEventListener('mousedown', dismiss);
+    return () => document.removeEventListener('mousedown', dismiss);
+  }, [colorPickerFor]);
+
+  // ── Audio helpers ─────────────────────────────────────────────────────
+  const playChime = () => {
+    if (audioRef.current) {
+      audioRef.current.currentTime = 0;
+      audioRef.current.play().catch(playBeep);
+    } else {
+      playBeep();
+    }
+  };
+
   const playBeep = () => {
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -266,352 +166,239 @@ const HomePage = () => {
     } catch {}
   };
 
+  // ── Timer controls ─────────────────────────────────────────────────────
+  const handleStart = () => {
+    if (isRunning) {
+      setIsRunning(false);
+    } else {
+      setEndTime(Date.now() + time * 1000);
+      if (!sessionStart) setSessionStart(Date.now());
+      setIsRunning(true);
+    }
+  };
+
+  const handleReset = () => {
+    logSessionRef.current('reset');
+    setIsRunning(false);
+    setEndTime(null);
+    setTime(lastSetTime);
+  };
+
+  const handleTimeClick = () => {
+    if (isRunning) return;
+    setInputMins(Math.floor(time / 60));
+    setInputSecs('00');
+    setEditingTime(true);
+  };
+
+  const commitEdit = () => {
+    const m = parseInt(inputMins, 10) || 0;
+    const s = parseInt(inputSecs, 10) || 0;
+    if (m > 0 || s > 0) {
+      const t = m * 60 + s;
+      setTime(t);
+      setLastSetTime(t);
+    }
+    setEditingTime(false);
+  };
+
+  const handleEditKeyDown = (e) => {
+    if (e.key === 'Enter') commitEdit();
+    else if (e.key === 'Escape') setEditingTime(false);
+  };
+
+  // ── Category helpers ──────────────────────────────────────────────────
+  const handleDeleteCategory = (name) => {
+    setCategories(prev => prev.filter(c => c.name !== name));
+    if (category === name) {
+      setCategory(categories.find(c => c.name !== name)?.name ?? 'General');
+    }
+  };
+
+  const handleSetColor = (name, color) => {
+    setCategories(prev => prev.map(c => c.name === name ? { ...c, color } : c));
+  };
+
+  const handleAddCategory = () => {
+    const name = newCatName.trim();
+    if (name && !categories.some(c => c.name === name)) {
+      setCategories(prev => [...prev, { name, color: newCatColor }]);
+      setCategory(name);
+    }
+    setNewCatName('');
+    setNewCatColor(PRESET_COLORS[0]);
+    setAddingCategory(false);
+  };
+
+  // ── Theme helpers ─────────────────────────────────────────────────────
+  const ghostStyle = { borderColor: fg, color: fg };
+  const solidStyle = { background: fg, borderColor: fg, color: bgColor };
+
+  const formatTime = () => {
+    const m = Math.floor(time / 60);
+    const s = (time % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
+
   return (
-    <div
-      className="timer-container"
-      style={{
-        background: getCategoryColor(category),
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: '100vw',
-        margin: 0,
-        padding: 0,
-        position: 'relative',
-      }}
-    >
-      <div style={{ position: 'absolute', top: 24, right: 32, zIndex: 10 }}>
-        <Link
-          to="/stats"
-          style={{
-            display: 'inline-block',
-            padding: '8px 22px',
-            borderRadius: 20,
-            background: '#fff',
-            color: '#1976d2',
-            fontWeight: 'bold',
-            fontSize: 17,
-            textDecoration: 'none',
-            border: '2px solid #1976d2',
-            boxShadow: '0 2px 8px rgba(25,118,210,0.08)',
-            transition: 'background 0.2s, color 0.2s',
-          }}
-          onMouseOver={e => {
-            e.target.style.background = '#1976d2';
-            e.target.style.color = '#fff';
-          }}
-          onMouseOut={e => {
-            e.target.style.background = '#fff';
-            e.target.style.color = '#1976d2';
-          }}
-        >
-          Go to Stats
+    <div className="timer-page" style={{ background: bgColor, color: fg }}>
+      <audio ref={audioRef} src={chimeSound} preload="auto" />
+
+      {/* Nav */}
+      <div className="timer-nav">
+        <Link to="/stats" className="nav-btn" style={ghostStyle}>
+          Stats
         </Link>
       </div>
-      {/* Chime audio element */}
-      <audio ref={audioRef} src="src/assets/chime-sound-7143.mp3" preload="auto" />
-      <div className="timer-display">
-        <div className="timer-static" style={{ visibility: editingTime ? 'hidden' : 'visible' }}>
-          <h1
-            style={{ cursor: isRunning ? 'not-allowed' : 'pointer', width: '100%', opacity: isRunning ? 0.6 : 1 }}
-            onClick={handleTimeClick}
-            title={isRunning ? 'Pause or reset to edit timer' : 'Click to set timer'}
-          >
-            {formatTime()}
-          </h1>
-        </div>
-        <div className="timer-edit" style={{ visibility: editingTime ? 'visible' : 'hidden' }}>
-          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+
+      {/* Timer */}
+      <div className="timer-area">
+        {editingTime ? (
+          <div className="timer-input-row" style={{ color: fg }}>
             <input
-              type="text"
+              ref={minutesRef}
               className="timer-input"
-              value={inputMinutes}
-              onChange={handleMinutesChange}
-              onBlur={handleTimeInputBlur}
-              onKeyDown={handleTimeInputKeyDown}
-              ref={minutesInputRef}
-              maxLength={2}
-              disabled={isRunning}
-              style={{ width: '60px' }}
+              style={{ color: fg }}
+              value={inputMins}
+              onChange={e => setInputMins(e.target.value.replace(/\D/g, ''))}
+              onBlur={commitEdit}
+              onKeyDown={handleEditKeyDown}
+              maxLength={3}
             />
             <span className="timer-colon">:</span>
             <input
-              type="text"
               className="timer-input"
-              value={inputSeconds.toString().padStart(2, '0')}
-              onChange={handleSecondsChange}
-              onBlur={handleTimeInputBlur}
-              onKeyDown={handleTimeInputKeyDown}
+              style={{ color: fg }}
+              value={String(inputSecs).padStart(2, '0')}
+              onChange={e => {
+                let v = e.target.value.replace(/\D/g, '');
+                if (parseInt(v, 10) > 59) v = '59';
+                setInputSecs(v.slice(0, 2));
+              }}
+              onBlur={commitEdit}
+              onKeyDown={handleEditKeyDown}
               maxLength={2}
-              disabled={isRunning}
-              style={{ width: '60px' }}
             />
-          </span>
-        </div>
+          </div>
+        ) : (
+          <div
+            className={`timer-time${isRunning ? ' locked' : ''}`}
+            style={{ color: fg }}
+            onClick={handleTimeClick}
+            title={isRunning ? 'Pause to edit' : 'Click to set time'}
+          >
+            {formatTime()}
+          </div>
+        )}
       </div>
+
+      {/* Controls */}
       <div className="timer-buttons">
-        <button
-          onClick={() => {
-            if (!isRunning) {
-              setEndTime(Date.now() + time * 1000);
-              setSessionStart(Date.now());
-            }
-            setIsRunning(!isRunning);
-          }}
-          style={{
-            background: '#f5f5f5',
-            color: '#444',
-            border: '2px solid #bbb',
-            borderRadius: 8,
-            padding: '8px 18px',
-            cursor: 'pointer',
-            fontWeight: 'bold',
-            outline: 'none',
-            marginRight: 8,
-            transition: 'all 0.2s',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-          }}
-        >
+        <button className="timer-btn" style={ghostStyle} onClick={handleStart}>
           {isRunning ? 'Pause' : 'Start'}
         </button>
-        <button
-          onClick={() => {
-            setTime(lastSetTime);
-            setIsRunning(false);
-            setEndTime(null);
-            setLastSetTime(lastSetTime); // Ensure reset always uses lastSetTime
-            logSession('reset');
-          }}
-          style={{
-            background: '#f5f5f5',
-            color: '#444',
-            border: '2px solid #bbb',
-            borderRadius: 8,
-            padding: '8px 18px',
-            cursor: 'pointer',
-            fontWeight: 'bold',
-            outline: 'none',
-            transition: 'all 0.2s',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-          }}
-        >
+        <button className="timer-btn" style={ghostStyle} onClick={handleReset}>
           Reset
         </button>
       </div>
-      <div className="category-bar" style={{ display: 'flex', gap: '10px', margin: '24px 0', flexWrap: 'wrap' }}>
-        {categories.map(cat => (
-          <div key={cat.name} style={{ position: 'relative', display: 'inline-block' }}>
-            <button
-              onClick={() => setCategory(cat.name)}
-              style={{
-                background: category === cat.name ? cat.color : '#f5f5f5',
-                color: category === cat.name ? '#fff' : cat.color,
-                border: category === cat.name ? '2px solid #222' : `2px solid ${cat.color}`,
-                fontWeight: category === cat.name ? 'bold' : 'normal',
-                borderRadius: 8,
-                padding: '8px 18px',
-                cursor: 'pointer',
-                outline: 'none',
-                boxShadow: category === cat.name ? '0 2px 8px rgba(0,0,0,0.12)' : 'none',
-                opacity: category === cat.name ? 1 : 0.85,
-                transition: 'all 0.2s',
-                position: 'relative',
-                paddingRight: '32px',
-              }}
-            >
-              {cat.name}
-            </button>
-            <button
-              className="cat-menu-btn"
-              style={{
-                position: 'absolute',
-                right: 4,
-                top: 4,
-                background: 'transparent',
-                border: 'none',
-                color: '#fff',
-                fontSize: '1.2em',
-                cursor: 'pointer',
-                zIndex: 2,
-                padding: 0,
-                width: 24,
-                height: 24,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                opacity: 0.7,
-              }}
-              onClick={e => {
-                e.stopPropagation();
-                setMenuOpen(cat.name === menuOpen ? null : cat.name);
-                setColorMenuOpen(null);
-              }}
-              title="Category options"
-            >
-              &#8942;
-            </button>
-            {menuOpen === cat.name && (
-              <div className="cat-menu" style={{
-                position: 'absolute',
-                right: 0,
-                top: 36,
-                background: '#fff',
-                color: '#222',
-                border: '1px solid #bbb',
-                borderRadius: 6,
-                boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
-                zIndex: 10,
-                minWidth: 120,
-              }}>
+
+      {/* Category bar */}
+      <div className="category-bar">
+        {categories.map(cat => {
+          const isActive = cat.name === category;
+          return (
+            <div key={cat.name} className="category-pill-wrap">
+              <button
+                className="category-pill"
+                style={isActive ? solidStyle : ghostStyle}
+                onClick={() => setCategory(cat.name)}
+              >
+                <span
+                  className="color-dot"
+                  style={{ background: cat.color }}
+                  onClick={e => {
+                    e.stopPropagation();
+                    setColorPickerFor(colorPickerFor === cat.name ? null : cat.name);
+                  }}
+                  title="Change color"
+                />
+                {cat.name}
+              </button>
+
+              {cat.name !== 'General' && (
                 <button
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: cat.name === 'General' ? '#bbb' : '#d32f2f',
-                    padding: '8px 12px',
-                    width: '100%',
-                    textAlign: 'left',
-                    cursor: cat.name === 'General' ? 'not-allowed' : 'pointer',
-                    fontWeight: 'bold',
-                  }}
-                  onClick={() => {
-                    if (cat.name !== 'General') {
-                      setCategories(categories.filter(c => c.name !== cat.name));
-                      if (category === cat.name) setCategory('General');
-                    }
-                    setMenuOpen(null);
-                  }}
-                  disabled={cat.name === 'General'}
-                >Delete</button>
-                <button
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: '#1976d2',
-                    padding: '8px 12px',
-                    width: '100%',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    fontWeight: 'bold',
-                  }}
-                  onClick={() => {
-                    setColorMenuOpen(cat.name);
-                  }}
-                >Set Color</button>
-                {colorMenuOpen === cat.name && (
-                  <div style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 8,
-                    padding: 12,
-                    background: '#fafafa',
-                    borderRadius: 6,
-                    border: '1px solid #eee',
-                    marginTop: 4,
-                  }}>
-                    <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                      {defaultColors.map(color => (
-                        <button
-                          key={color}
-                          style={{
-                            width: 28,
-                            height: 28,
-                            borderRadius: 8, // soft corners
-                            border: color === cat.color ? `3px solid #222` : `2px solid ${color}`,
-                            background: color,
-                            cursor: 'pointer',
-                            outline: 'none',
-                            boxShadow: color === cat.color ? '0 0 0 2px #1976d2' : 'none',
-                            margin: 0,
-                            padding: 0,
-                          }}
-                          onClick={() => {
-                            setCategories(categories.map(c => c.name === cat.name ? { ...c, color } : c));
-                          }}
-                          title={color}
-                        />
-                      ))}
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <input
-                        type="color"
-                        value={cat.color}
-                        onChange={e => {
-                          setCategories(categories.map(c => c.name === cat.name ? { ...c, color: e.target.value } : c));
-                        }}
-                        style={{ width: 32, height: 32, border: 'none', background: 'none', cursor: 'pointer' }}
+                  className="pill-delete"
+                  style={solidStyle}
+                  onClick={() => handleDeleteCategory(cat.name)}
+                  title={`Delete ${cat.name}`}
+                >
+                  ×
+                </button>
+              )}
+
+              {colorPickerFor === cat.name && (
+                <div className="color-popover">
+                  <div className="color-swatches">
+                    {PRESET_COLORS.map(color => (
+                      <button
+                        key={color}
+                        className={`color-swatch${cat.color === color ? ' selected' : ''}`}
+                        style={{ background: color }}
+                        onClick={() => { handleSetColor(cat.name, color); setColorPickerFor(null); }}
                       />
-                      <span style={{ fontSize: 13, color: '#444' }}>Custom</span>
-                    </div>
+                    ))}
                   </div>
-                )}
-              </div>
-            )}
-          </div>
-        ))}
+                  <input
+                    type="color"
+                    value={cat.color}
+                    onChange={e => handleSetColor(cat.name, e.target.value)}
+                    style={{ width: '100%', height: 28, border: 'none', cursor: 'pointer', padding: 0, borderRadius: 4 }}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+
         {addingCategory ? (
-          <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <div className="add-category-form">
             <input
-              type="text"
-              className="category-select"
-              ref={newCategoryInputRef}
-              value={newCategory}
-              onChange={e => setNewCategory(e.target.value)}
-              placeholder="New category"
-              style={{ marginRight: 2 }}
-            />
-            <input
-              type="color"
-              value={newCategoryColor}
-              onChange={e => setNewCategoryColor(e.target.value)}
-              title="Pick a color"
-              style={{ width: 28, height: 28, border: 'none', background: 'none', cursor: 'pointer' }}
-            />
-            <button
-              onClick={() => {
-                if (newCategory.trim() && !categories.some(c => c.name === newCategory.trim())) {
-                  setCategories([...categories, { name: newCategory.trim(), color: newCategoryColor }]);
-                  setCategory(newCategory.trim());
-                }
-                setNewCategory("");
-                setNewCategoryColor('#1976d2');
-                setAddingCategory(false);
+              ref={newCatRef}
+              className="category-input"
+              style={ghostStyle}
+              value={newCatName}
+              onChange={e => setNewCatName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleAddCategory();
+                else if (e.key === 'Escape') { setAddingCategory(false); setNewCatName(''); }
               }}
-              style={{ marginLeft: 2 }}
-            >Add</button>
-            <button
-              onClick={() => {
-                setAddingCategory(false);
-                setNewCategory("");
-                setNewCategoryColor('#1976d2');
-              }}
-              style={{ marginLeft: 2 }}
-            >Cancel</button>
-          </span>
+              placeholder="Name"
+              maxLength={20}
+            />
+            <div className="color-swatches" style={{ background: '#fff', padding: '6px 8px', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.12)' }}>
+              {PRESET_COLORS.map(color => (
+                <button
+                  key={color}
+                  className={`color-swatch${newCatColor === color ? ' selected' : ''}`}
+                  style={{ background: color }}
+                  onClick={() => setNewCatColor(color)}
+                />
+              ))}
+            </div>
+            <button className="timer-btn" style={{ ...solidStyle, padding: '6px 16px', fontSize: '0.85rem' }} onClick={handleAddCategory}>Add</button>
+            <button className="timer-btn" style={{ ...ghostStyle, padding: '6px 16px', fontSize: '0.85rem' }} onClick={() => { setAddingCategory(false); setNewCatName(''); }}>✕</button>
+          </div>
         ) : (
           <button
+            className="category-pill add-pill"
+            style={ghostStyle}
             onClick={() => setAddingCategory(true)}
-            style={{
-              background: '#f5f5f5',
-              color: '#444',
-              border: '2px solid #444',
-              borderRadius: 8,
-              padding: '8px 18px',
-              cursor: 'pointer',
-              fontWeight: 'bold',
-              outline: 'none',
-              transition: 'all 0.2s',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
-            }}
+            title="Add category"
           >
-            + New Category
+            +
           </button>
         )}
       </div>
     </div>
   );
-};
-
-export default HomePage;
+}

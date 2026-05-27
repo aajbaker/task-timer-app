@@ -1,457 +1,289 @@
-import React, { useMemo } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { useState, useEffect, useMemo } from 'react';
+import { Link } from 'react-router-dom';
+import { useCategories, useSessions } from './AppContext';
+import { getContrastColor } from './utils';
 
-const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-const getCategoryColor = () => {
-  const storedCategories = localStorage.getItem('categories');
-  const storedCategory = localStorage.getItem('category');
-  let categories = [{ name: 'General', color: '#1976d2' }];
-  let category = 'General';
-  if (storedCategories) {
-    const parsed = JSON.parse(storedCategories);
-    if (Array.isArray(parsed) && typeof parsed[0] === 'string') {
-      categories = parsed.map(name => ({ name, color: '#1976d2' }));
-    } else {
-      categories = parsed;
-    }
-  }
-  if (storedCategory) category = storedCategory;
-  const cat = categories.find(c => c.name === category);
-  return cat ? cat.color : '#1976d2';
-};
+function getContrastYIQ(hex) {
+  hex = hex.replace('#', '');
+  if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  return ((r * 299 + g * 587 + b * 114) / 1000) >= 140 ? '#1a1a1a' : '#fff';
+}
 
-const StatsPage = () => {
-  const location = useLocation();
-  const isStats = location.pathname === '/stats';
-  const bgColor = getCategoryColor();
+export default function StatsPage() {
+  const { categories, getCategoryColor, activeCategory } = useCategories();
+  const { sessions } = useSessions();
 
-  // Get categories for color lookup
-  const categories = useMemo(() => {
-    try {
-      return JSON.parse(localStorage.getItem('categories')) || [{ name: 'General', color: '#1976d2' }];
-    } catch {
-      return [{ name: 'General', color: '#1976d2' }];
-    }
-  }, []);
+  const bgColor = getCategoryColor(activeCategory);
+  const fg = getContrastColor(bgColor);
+  const navStyle = { borderColor: fg, color: fg };
 
-  // Get sessions for current week
+  // ── Current week sessions ─────────────────────────────────────────────
   const weekSessions = useMemo(() => {
-    let sessions = [];
-    try {
-      sessions = JSON.parse(localStorage.getItem('sessions')) || [];
-    } catch {}
-    if (!sessions.length) return [];
-    // Get start of current week (Sunday)
     const now = new Date();
     const startOfWeek = new Date(now);
-    startOfWeek.setHours(0,0,0,0);
+    startOfWeek.setHours(0, 0, 0, 0);
     startOfWeek.setDate(now.getDate() - now.getDay());
     const endOfWeek = new Date(startOfWeek);
     endOfWeek.setDate(startOfWeek.getDate() + 7);
-    // Filter sessions in this week
     return sessions.filter(s => {
       const d = new Date(s.start);
       return d >= startOfWeek && d < endOfWeek;
     });
-  }, []);
+  }, [sessions]);
 
-  // Aggregate time (in hours) per day/category
+  // grid[dayIndex][categoryName] = total seconds
   const gridData = useMemo(() => {
-    // grid[day][category] = total seconds
-    const grid = Array(7).fill(0).map(() => ({}));
+    const grid = Array.from({ length: 7 }, () => ({}));
     weekSessions.forEach(s => {
       if (!s.category) return;
       const day = s.dayOfWeek;
-      if (!grid[day][s.category]) grid[day][s.category] = 0;
-      grid[day][s.category] += s.duration;
+      grid[day][s.category] = (grid[day][s.category] || 0) + s.duration;
     });
     return grid;
   }, [weekSessions]);
-  // Dynamically compute y-axis based on max hours in week
+
+  const activeCatNames = useMemo(() => {
+    const names = new Set();
+    weekSessions.forEach(s => { if (s.category) names.add(s.category); });
+    return [...names];
+  }, [weekSessions]);
+
   const maxDaySeconds = useMemo(() => {
-    let max = 0;
-    gridData.forEach(catMap => {
+    return gridData.reduce((max, catMap) => {
       const total = Object.values(catMap).reduce((a, b) => a + b, 0);
-      if (total > max) max = total;
-    });
-    return max;
+      return Math.max(max, total);
+    }, 0);
   }, [gridData]);
+
   const maxHours = Math.max(2, Math.ceil(maxDaySeconds / 3600));
   const hours = Array.from({ length: maxHours + 1 }, (_, i) => i);
-  const yStep = 60;
-  const yBase = 40;
-  const svgHeight = yBase + (hours.length - 1) * yStep + 40; // extra 40 for bottom labels
+  const Y_STEP = 60;
+  const Y_BASE = 36;
+  const svgHeight = Y_BASE + hours.length * Y_STEP + 32;
 
-  // Helper to get color for a category
-  const getCatColor = catName => {
-    const cat = categories.find(c => c.name === catName);
-    return cat ? cat.color : '#1976d2';
-  };
-
-  // Helper to download sessions as CSV
+  // ── CSV export ────────────────────────────────────────────────────────
   const downloadCSV = () => {
-    let sessions = [];
-    try {
-      sessions = JSON.parse(localStorage.getItem('sessions')) || [];
-    } catch {}
     if (!sessions.length) return;
     const header = ['Start', 'End', 'Duration (s)', 'DayOfWeek', 'Category', 'EndType'];
     const rows = sessions.map(s => [
       new Date(s.start).toISOString(),
       new Date(s.end).toISOString(),
       s.duration,
-      days[s.dayOfWeek],
-      s.category,
-      s.endType || ''
+      DAYS[s.dayOfWeek],
+      s.category || '',
+      s.endType || '',
     ]);
     const csv = [header, ...rows].map(r => r.map(x => `"${x}"`).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'task-timer-sessions.csv';
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: 'task-timer-sessions.csv' });
     document.body.appendChild(a);
     a.click();
-    setTimeout(() => {
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }, 0);
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 0);
   };
 
-  // --- Weekly Goals State ---
-  const [goals, setGoals] = React.useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('weeklyGoals')) || [];
-    } catch {
-      return [];
-    }
+  // ── Weekly goals ──────────────────────────────────────────────────────
+  const [goals, setGoals] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('weeklyGoals')) || []; }
+    catch { return []; }
   });
-  const [goalMode, setGoalMode] = React.useState('total'); // 'total' or 'perDay'
-  const [goalCategory, setGoalCategory] = React.useState('Any');
-  const [goalValue, setGoalValue] = React.useState('');
-  const [showGoalForm, setShowGoalForm] = React.useState(false);
+  const [goalMode, setGoalMode] = useState('total');
+  const [goalCategory, setGoalCategory] = useState('Any');
+  const [goalValue, setGoalValue] = useState('');
+  const [showGoalForm, setShowGoalForm] = useState(false);
 
-  React.useEffect(() => {
-    localStorage.setItem('weeklyGoals', JSON.stringify(goals));
+  // Persist goals
+  useEffect(() => {
+    try { localStorage.setItem('weeklyGoals', JSON.stringify(goals)); } catch {}
   }, [goals]);
 
-  // --- Goal Progress Calculation ---
   const getGoalProgress = (goal) => {
+    const sumDay = (catMap) =>
+      goal.category === 'Any'
+        ? Object.values(catMap).reduce((a, b) => a + b, 0)
+        : (catMap[goal.category] || 0);
+
     if (goal.mode === 'total') {
-      // Sum all time for category (or all)
-      let total = 0;
-      gridData.forEach(catMap => {
-        if (goal.category === 'Any') {
-          total += Object.values(catMap).reduce((a, b) => a + b, 0);
-        } else {
-          total += catMap[goal.category] || 0;
-        }
-      });
+      const total = gridData.reduce((acc, catMap) => acc + sumDay(catMap), 0);
       return { value: total / 3600, percent: Math.min(1, total / (goal.value * 3600)) };
-    } else if (goal.mode === 'perDay') {
-      // Count days with at least goal.value hours in category (or all)
-      let count = 0;
-      gridData.forEach(catMap => {
-        const t = goal.category === 'Any' ? Object.values(catMap).reduce((a, b) => a + b, 0) : (catMap[goal.category] || 0);
-        if (t >= goal.value * 3600) count++;
-      });
-      return { value: count, percent: Math.min(1, count / 7) };
-    } else if (goal.mode === 'monFri') {
-      // Only count Mon-Fri (days 1-5)
-      let count = 0;
-      for (let i = 1; i <= 5; i++) {
-        const catMap = gridData[i] || {};
-        const t = goal.category === 'Any' ? Object.values(catMap).reduce((a, b) => a + b, 0) : (catMap[goal.category] || 0);
-        if (t >= goal.value * 3600) count++;
-      }
-      return { value: count, percent: Math.min(1, count / 5) };
     }
-    return { value: 0, percent: 0 };
+    const daysRange = goal.mode === 'monFri' ? [1, 2, 3, 4, 5] : [0, 1, 2, 3, 4, 5, 6];
+    const met = daysRange.filter(i => sumDay(gridData[i] || {}) >= goal.value * 3600).length;
+    return { value: met, percent: Math.min(1, met / daysRange.length) };
   };
 
-  // --- Add Goal Handler ---
   const handleAddGoal = (e) => {
     e.preventDefault();
-    if (goalValue) {
-      setGoals([...goals, { mode: goalMode, category: goalCategory, value: Number(goalValue) }]);
-      setGoalValue('');
-    }
+    if (!goalValue) return;
+    setGoals(prev => [...prev, { mode: goalMode, category: goalCategory, value: Number(goalValue) }]);
+    setGoalValue('');
+    setShowGoalForm(false);
   };
 
-  // --- Remove Goal ---
-  const handleRemoveGoal = idx => {
-    setGoals(goals.filter((_, i) => i !== idx));
-  };
+  const goalModeLabel = (mode) =>
+    mode === 'total' ? 'total this week' : mode === 'perDay' ? 'every day' : 'Mon–Fri';
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        width: '100vw',
-        background: bgColor,
-        position: 'relative',
-      }}
-    >
-      <div style={{ position: 'fixed', top: 24, right: 32, zIndex: 10, display: 'flex', flexDirection: 'row', gap: 8 }}>
-        <button onClick={downloadCSV} style={{
-          display: 'inline-block',
-          padding: '8px 22px',
-          borderRadius: 20,
-          background: '#fff',
-          color: '#1976d2',
-          fontWeight: 'bold',
-          fontSize: 17,
-          border: '2px solid #1976d2',
-          boxShadow: '0 2px 8px rgba(25,118,210,0.08)',
-          cursor: 'pointer',
-          transition: 'background 0.2s, color 0.2s',
-        }}
-        onMouseOver={e => {
-          e.target.style.background = '#1976d2';
-          e.target.style.color = '#fff';
-        }}
-        onMouseOut={e => {
-          e.target.style.background = '#fff';
-          e.target.style.color = '#1976d2';
-        }}
-        >Download Data</button>
-        <Link to="/" style={{
-          display: 'inline-block',
-          padding: '8px 22px',
-          borderRadius: 20,
-          background: '#fff',
-          color: '#1976d2',
-          fontWeight: 'bold',
-          fontSize: 17,
-          textDecoration: 'none',
-          border: '2px solid #1976d2',
-          boxShadow: '0 2px 8px rgba(25,118,210,0.08)',
-          transition: 'background 0.2s, color 0.2s',
-        }}
-        onMouseOver={e => {
-          e.target.style.background = '#1976d2';
-          e.target.style.color = '#fff';
-        }}
-        onMouseOut={e => {
-          e.target.style.background = '#fff';
-          e.target.style.color = '#1976d2';
-        }}
-        >
-          Go to Timer
+    <div className="stats-page" style={{ background: bgColor }}>
+      {/* Nav */}
+      <div className="stats-nav">
+        <button className="nav-btn" style={navStyle} onClick={downloadCSV}>
+          Download
+        </button>
+        <Link to="/" className="nav-btn" style={navStyle}>
+          Timer
         </Link>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
-        <div style={{ maxWidth: 900, width: '100%', padding: 24, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <h2 style={{ textAlign: 'center', marginBottom: 32 }}>Weekly Activity</h2>
-          <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 2px 12px rgba(0,0,0,0.07)', padding: 24, display: 'flex', justifyContent: 'center', width: 700 }}>
-            <svg width={700} height={svgHeight} style={{ display: 'block' }}>
-              {/* Y axis labels (hours, flipped) */}
+
+      {/* Chart card */}
+      <div className="stats-card">
+        <h2>This Week</h2>
+
+        {weekSessions.length === 0 ? (
+          <p className="empty-chart">No sessions recorded this week. Start the timer to log time!</p>
+        ) : (
+          <>
+            <svg
+              viewBox={`0 0 700 ${svgHeight}`}
+              style={{ width: '100%', height: 'auto', display: 'block' }}
+            >
+              {/* Horizontal grid + y-axis labels */}
               {hours.map((h, i) => {
-                const y = yBase + (hours.length - 1 - i) * yStep;
+                const y = Y_BASE + (hours.length - 1 - i) * Y_STEP;
                 return (
-                  <text
-                    key={h}
-                    x={32}
-                    y={y}
-                    fontSize={15}
-                    fill={h === 0 ? '#444' : '#888'}
-                    textAnchor="end"
-                    alignmentBaseline="middle"
-                  >
-                    {h}
-                  </text>
-                );
-              })}
-              {/* X axis labels (days) */}
-              {days.map((d, i) => {
-                const isToday = i === new Date().getDay();
-                return (
-                  <g key={d}>
-                    <text
-                      x={80 + i * 80}
-                      y={svgHeight - 10}
-                      fontSize={15}
-                      fill="#1976d2"
-                      textAnchor="middle"
-                      fontWeight="bold"
-                    >
-                      {d}
-                    </text>
-                    {isToday && (
-                      <circle
-                        cx={80 + i * 80}
-                        cy={svgHeight - 28}
-                        r={7}
-                        fill="#1976d2"
-                        stroke="#fff"
-                        strokeWidth={2}
-                      />
-                    )}
+                  <g key={h}>
+                    <text x={30} y={y + 4} fontSize={13} fill="#aaa" textAnchor="end">{h}</text>
+                    <line x1={40} x2={680} y1={y} y2={y} stroke="#f0f0f0" strokeWidth={1.5} />
                   </g>
                 );
               })}
-              {/* Grid lines (horizontal) */}
-              {hours.map((_, i) => {
-                const y = yBase + (hours.length - 1 - i) * yStep;
+
+              {/* Vertical grid + day labels */}
+              {DAYS.map((d, i) => {
+                const x = 80 + i * 86;
+                const isToday = i === new Date().getDay();
                 return (
-                  <line
-                    key={i}
-                    x1={60}
-                    x2={700 - 20}
-                    y1={y}
-                    y2={y}
-                    stroke="#eee"
-                    strokeWidth={1.5}
-                  />
+                  <g key={d}>
+                    <line x1={x} x2={x} y1={Y_BASE} y2={Y_BASE + (hours.length - 1) * Y_STEP} stroke="#f0f0f0" strokeWidth={1} />
+                    <text x={x} y={svgHeight - 6} fontSize={13} fill={isToday ? '#1976d2' : '#aaa'} textAnchor="middle" fontWeight={isToday ? '700' : '400'}>
+                      {d}
+                    </text>
+                    {isToday && <circle cx={x} cy={svgHeight - 22} r={3} fill="#1976d2" />}
+                  </g>
                 );
               })}
-              {/* Grid lines (vertical) */}
-              {days.map((_, i) => (
-                <line
-                  key={i}
-                  y1={yBase}
-                  y2={yBase + (hours.length - 1) * yStep}
-                  x1={80 + i * 80}
-                  x2={80 + i * 80}
-                  stroke="#eee"
-                  strokeWidth={1.5}
-                />
-              ))}
-              {/* Data bars: stacked by category */}
+
+              {/* Stacked bars */}
               {gridData.map((catMap, dayIdx) => {
-                let yAcc = yBase + (hours.length - 1) * yStep;
-                const totalSeconds = Object.values(catMap).reduce((a, b) => a + b, 0);
-                if (!totalSeconds) return null;
-                // Sort categories for stacking (by total time, descending)
-                const sortedCats = Object.entries(catMap).sort((a, b) => b[1] - a[1]);
-                return sortedCats.map(([cat, secs], i) => {
-                  const barHeight = Math.min((secs / 3600) * yStep, (hours.length - 0.1) * yStep);
-                  yAcc -= barHeight;
-                  return (
-                    <rect
-                      key={cat + dayIdx}
-                      x={80 + dayIdx * 80 - 18}
-                      y={yAcc}
-                      width={36}
-                      height={barHeight}
-                      fill={getCatColor(cat)}
-                      opacity={0.92}
-                      rx={7}
-                    >
+                const x = 80 + dayIdx * 86;
+                const totalSecs = Object.values(catMap).reduce((a, b) => a + b, 0);
+                if (!totalSecs) return null;
+                const sorted = Object.entries(catMap).sort((a, b) => b[1] - a[1]);
+                let yAcc = Y_BASE + (hours.length - 1) * Y_STEP;
+                return sorted.map(([cat, secs]) => {
+                  const barH = Math.min((secs / 3600) * Y_STEP, (hours.length - 0.1) * Y_STEP);
+                  yAcc -= barH;
+                  const rect = (
+                    <rect key={cat + dayIdx} x={x - 20} y={yAcc} width={40} height={barH} fill={getCategoryColor(cat)} rx={6} opacity={0.92}>
                       <title>{cat}: {(secs / 3600).toFixed(2)}h</title>
                     </rect>
                   );
+                  return rect;
                 });
               })}
             </svg>
-          </div>
-        </div>
-        {/* Weekly Goals Section */}
-        <div style={{ maxWidth: 700, width: '100%', margin: '32px auto 0', background: '#fff', borderRadius: 16, boxShadow: '0 2px 12px rgba(0,0,0,0.07)', padding: 24, color: '#222' }}>
-          <h3 style={{ marginTop: 0, marginBottom: 16, color: '#1976d2' }}>Weekly Goals</h3>
-          {!showGoalForm && (
-            <button onClick={() => setShowGoalForm(true)} style={{ fontSize: 16, padding: '6px 20px', borderRadius: 8, background: '#1976d2', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', marginBottom: 18 }}>Add Goal</button>
-          )}
-          {showGoalForm && (
-            <form onSubmit={e => { handleAddGoal(e); setShowGoalForm(false); }} style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', marginBottom: 18, color: '#222' }}>
-              <span style={{ color: '#222' }}>Amount of time</span>
-              <input type="number" min="0.5" step="0.5" value={goalValue} onChange={e => setGoalValue(e.target.value)} style={{ width: 60, fontSize: 16, padding: 4, color: '#222', background: '#fff', border: '1px solid #bbb' }} required />
-              <span style={{ color: '#222' }}>hours</span>
-              <select value={goalMode} onChange={e => setGoalMode(e.target.value)} style={{ fontSize: 16, padding: 4, color: '#222', background: '#fff', border: '1px solid #bbb' }}>
-                <option value="total">Total (this week)</option>
-                <option value="perDay">Every day</option>
-                <option value="monFri">Mon-Fri</option>
-              </select>
-              <span style={{ color: '#222' }}>in</span>
-              <select value={goalCategory} onChange={e => setGoalCategory(e.target.value)} style={{ fontSize: 16, padding: 4, color: '#222', background: '#fff', border: '1px solid #bbb' }}>
-                <option value="Any">All Categories</option>
-                {categories.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
-              </select>
-              <button type="submit" style={{ fontSize: 16, padding: '4px 16px', borderRadius: 8, background: '#1976d2', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>Add</button>
-              <button type="button" onClick={() => { setShowGoalForm(false); setGoalValue(''); }} style={{ fontSize: 16, padding: '4px 16px', borderRadius: 8, background: '#eee', color: '#1976d2', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>Cancel</button>
-            </form>
-          )}
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-            {goals.length === 0 && <li style={{ color: '#888', fontStyle: 'italic' }}>No goals set for this week.</li>}
-            {goals.map((goal, idx) => {
-              const progress = getGoalProgress(goal);
-              // Get category color for pill
-              const catColor = goal.category !== 'Any' ? getCatColor(goal.category) : '#1976d2';
-              // Helper to determine text color based on background
-              function getContrastYIQ(hexcolor) {
-                hexcolor = hexcolor.replace('#', '');
-                if (hexcolor.length === 3) hexcolor = hexcolor.split('').map(x => x + x).join('');
-                const r = parseInt(hexcolor.substr(0,2),16);
-                const g = parseInt(hexcolor.substr(2,2),16);
-                const b = parseInt(hexcolor.substr(4,2),16);
-                const yiq = ((r*299)+(g*587)+(b*114))/1000;
-                return yiq >= 180 ? '#222' : '#fff';
-              }
-              const pillTextColor = getContrastYIQ(catColor);
-              return (
-                <li key={idx} style={{ marginBottom: 18, background: '#f5f5f5', borderRadius: 8, padding: 12, position: 'relative', color: '#222' }}>
-                  <button onClick={() => handleRemoveGoal(idx)} style={{ position: 'absolute', right: 10, top: 10, background: 'none', border: 'none', color: '#888', fontSize: 18, cursor: 'pointer' }} title="Remove goal">×</button>
-                  <div style={{ marginBottom: 6, color: '#222' }}>
-                    {goal.mode === 'total' ? (
-                      <span>At least <b>{goal.value}h</b> total in {goal.category === 'Any' ? 'all categories' : (
-                        <span style={{
-                          display: 'inline-block',
-                          background: catColor,
-                          color: pillTextColor,
-                          borderRadius: 8,
-                          padding: '2px 10px',
-                          fontWeight: 600,
-                          fontSize: 15,
-                          marginLeft: 2
-                        }}>{goal.category}</span>
-                      )}</span>
-                    ) : goal.mode === 'perDay' ? (
-                      <span>At least <b>{goal.value}h</b> every day in {goal.category === 'Any' ? 'all categories' : (
-                        <span style={{
-                          display: 'inline-block',
-                          background: catColor,
-                          color: pillTextColor,
-                          borderRadius: 8,
-                          padding: '2px 10px',
-                          fontWeight: 600,
-                          fontSize: 15,
-                          marginLeft: 2
-                        }}>{goal.category}</span>
-                      )} ({progress.value} days met)</span>
-                    ) : (
-                      <span>At least <b>{goal.value}h</b> Mon-Fri in {goal.category === 'Any' ? 'all categories' : (
-                        <span style={{
-                          display: 'inline-block',
-                          background: catColor,
-                          color: pillTextColor,
-                          borderRadius: 8,
-                          padding: '2px 10px',
-                          fontWeight: 600,
-                          fontSize: 15,
-                          marginLeft: 2
-                        }}>{goal.category}</span>
-                      )} ({progress.value} days met)</span>
-                    )}
+
+            {activeCatNames.length > 0 && (
+              <div className="chart-legend">
+                {activeCatNames.map(name => (
+                  <div key={name} className="legend-item">
+                    <div className="legend-swatch" style={{ background: getCategoryColor(name) }} />
+                    {name}
                   </div>
-                  <div style={{ height: 16, background: '#e3eafc', borderRadius: 8, overflow: 'hidden', marginBottom: 2 }}>
-                    <div style={{ width: `${progress.percent * 100}%`, height: '100%', background: progress.percent >= 1 ? '#388e3c' : '#1976d2', transition: 'width 0.3s' }} />
-                  </div>
-                  <div style={{ fontSize: 14, color: '#555' }}>
-                    {goal.mode === 'total'
-                      ? `${progress.value.toFixed(2)}h / ${goal.value}h`
-                      : goal.mode === 'perDay'
-                        ? `${progress.value} days / 7 days`
-                        : `${progress.value} days / 5 days`}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Goals card */}
+      <div className="stats-card">
+        <h3>Weekly Goals</h3>
+
+        {!showGoalForm ? (
+          <button className="btn btn-primary" style={{ marginBottom: 16 }} onClick={() => setShowGoalForm(true)}>
+            + Add Goal
+          </button>
+        ) : (
+          <form className="goal-form" onSubmit={handleAddGoal}>
+            <label>At least</label>
+            <input
+              type="number"
+              min="0.5"
+              step="0.5"
+              value={goalValue}
+              onChange={e => setGoalValue(e.target.value)}
+              required
+              placeholder="hrs"
+            />
+            <label>hours</label>
+            <select value={goalMode} onChange={e => setGoalMode(e.target.value)}>
+              <option value="total">total this week</option>
+              <option value="perDay">every day</option>
+              <option value="monFri">Mon–Fri</option>
+            </select>
+            <label>in</label>
+            <select value={goalCategory} onChange={e => setGoalCategory(e.target.value)}>
+              <option value="Any">All Categories</option>
+              {categories.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+            </select>
+            <button type="submit" className="btn btn-primary">Add</button>
+            <button type="button" className="btn btn-ghost" onClick={() => { setShowGoalForm(false); setGoalValue(''); }}>
+              Cancel
+            </button>
+          </form>
+        )}
+
+        <div className="goal-list">
+          {goals.length === 0 && <p className="empty-state">No goals set for this week.</p>}
+          {goals.map((goal, idx) => {
+            const progress = getGoalProgress(goal);
+            const catColor = goal.category !== 'Any' ? getCategoryColor(goal.category) : '#1976d2';
+            const barColor = progress.percent >= 1 ? '#388e3c' : catColor;
+            const daysTotal = goal.mode === 'monFri' ? 5 : 7;
+            return (
+              <div key={idx} className="goal-item">
+                <button className="goal-remove" onClick={() => setGoals(prev => prev.filter((_, i) => i !== idx))} title="Remove">×</button>
+                <div className="goal-label">
+                  At least <strong>{goal.value}h</strong> {goalModeLabel(goal.mode)} in{' '}
+                  {goal.category === 'Any' ? 'all categories' : (
+                    <span
+                      className="cat-pill-inline"
+                      style={{ background: catColor, color: getContrastYIQ(catColor) }}
+                    >
+                      {goal.category}
+                    </span>
+                  )}
+                  {goal.mode !== 'total' && ` — ${progress.value}/${daysTotal} days`}
+                </div>
+                <div className="goal-bar-track">
+                  <div className="goal-bar-fill" style={{ width: `${progress.percent * 100}%`, background: barColor }} />
+                </div>
+                <div className="goal-sub">
+                  {goal.mode === 'total'
+                    ? `${progress.value.toFixed(1)}h / ${goal.value}h`
+                    : `${progress.value} of ${daysTotal} days`}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
   );
-};
-
-export default StatsPage;
+}
