@@ -171,8 +171,8 @@ body, #root {
 }
 
 .color-dot {
-  width: 9px;
-  height: 9px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   flex-shrink: 0;
   cursor: pointer;
