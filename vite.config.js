@@ -4,5 +4,4 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  base: '/task-timer-app/', // <-- add this line (use your repo name)
 });
