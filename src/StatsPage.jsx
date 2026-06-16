@@ -5,15 +5,6 @@ import { getContrastColor } from './utils';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-function getContrastYIQ(hex) {
-  hex = hex.replace('#', '');
-  if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
-  const r = parseInt(hex.slice(0, 2), 16);
-  const g = parseInt(hex.slice(2, 4), 16);
-  const b = parseInt(hex.slice(4, 6), 16);
-  return ((r * 299 + g * 587 + b * 114) / 1000) >= 140 ? '#1a1a1a' : '#fff';
-}
-
 export default function StatsPage() {
   const { categories, getCategoryColor, activeCategory } = useCategories();
   const { sessions } = useSessions();
@@ -264,7 +255,7 @@ export default function StatsPage() {
                   {goal.category === 'Any' ? 'all categories' : (
                     <span
                       className="cat-pill-inline"
-                      style={{ background: catColor, color: getContrastYIQ(catColor) }}
+                      style={{ background: catColor, color: getContrastColor(catColor) }}
                     >
                       {goal.category}
                     </span>

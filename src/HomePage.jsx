@@ -17,11 +17,23 @@ export default function HomePage() {
 
   // ── Timer state ──────────────────────────────────────────────────────
   const saved = getSavedTimer();
-  const [time, setTime] = useState(saved.time ?? 30 * 60);
-  const [isRunning, setIsRunning] = useState(false);
-  const [endTime, setEndTime] = useState(null);
+
+  // Restore running state: if endTime is still in the future, resume.
+  const savedEndTime = saved.endTime ?? null;
+  const savedStillRunning = saved.isRunning && savedEndTime && Math.round((savedEndTime - Date.now()) / 1000) > 0;
+
+  const [isRunning, setIsRunning] = useState(savedStillRunning);
+  const [endTime, setEndTime] = useState(savedStillRunning ? savedEndTime : null);
+  const [time, setTime] = useState(() => {
+    if (savedStillRunning) return Math.max(0, Math.round((savedEndTime - Date.now()) / 1000));
+    return saved.time ?? 30 * 60;
+  });
   const [lastSetTime, setLastSetTime] = useState(saved.lastSetTime ?? 30 * 60);
-  const [sessionStart, setSessionStart] = useState(null);
+  const [sessionStart, setSessionStart] = useState(saved.sessionStart ?? null);
+
+  // ── Work-time accumulator (excludes paused time) ─────────────────────
+  const accumulatedSecsRef = useRef(0);
+  const resumeTimeRef = useRef(savedStillRunning ? Date.now() : null);
 
   // ── Timer editing ────────────────────────────────────────────────────
   const [editingTime, setEditingTime] = useState(false);
@@ -44,25 +56,31 @@ export default function HomePage() {
   const fg = getContrastColor(bgColor);
 
   // ── Stale-closure-safe session logger ─────────────────────────────────
-  // Reassigned every render so it always closes over fresh state.
   const logSessionRef = useRef(null);
   logSessionRef.current = (endType) => {
     if (!sessionStart) return;
+    const workedSecs = Math.round(
+      accumulatedSecsRef.current +
+      (isRunning && resumeTimeRef.current ? (Date.now() - resumeTimeRef.current) / 1000 : 0)
+    );
+    if (workedSecs <= 0) { setSessionStart(null); return; }
     addSession({
       start: sessionStart,
       end: Date.now(),
-      duration: Math.round((Date.now() - sessionStart) / 1000),
+      duration: workedSecs,
       dayOfWeek: new Date(sessionStart).getDay(),
       category,
       endType,
     });
+    accumulatedSecsRef.current = 0;
+    resumeTimeRef.current = null;
     setSessionStart(null);
   };
 
-  // ── Persist minimal timer state ───────────────────────────────────────
+  // ── Persist timer state (including running state for tab-title continuity) ─
   useEffect(() => {
-    localStorage.setItem('timerState', JSON.stringify({ time, lastSetTime }));
-  }, [time, lastSetTime]);
+    localStorage.setItem('timerState', JSON.stringify({ time, lastSetTime, isRunning, endTime, sessionStart }));
+  }, [time, lastSetTime, isRunning, endTime, sessionStart]);
 
   // ── Page title ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -169,16 +187,24 @@ export default function HomePage() {
   // ── Timer controls ─────────────────────────────────────────────────────
   const handleStart = () => {
     if (isRunning) {
+      // Pause: bank elapsed time so far
+      if (resumeTimeRef.current) {
+        accumulatedSecsRef.current += (Date.now() - resumeTimeRef.current) / 1000;
+        resumeTimeRef.current = null;
+      }
       setIsRunning(false);
     } else {
-      setEndTime(Date.now() + time * 1000);
+      resumeTimeRef.current = Date.now();
       if (!sessionStart) setSessionStart(Date.now());
+      setEndTime(Date.now() + time * 1000);
       setIsRunning(true);
     }
   };
 
   const handleReset = () => {
     logSessionRef.current('reset');
+    accumulatedSecsRef.current = 0;
+    resumeTimeRef.current = null;
     setIsRunning(false);
     setEndTime(null);
     setTime(lastSetTime);
