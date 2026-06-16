@@ -83,11 +83,22 @@ export default function HomePage() {
   }, [time, lastSetTime, isRunning, endTime, sessionStart]);
 
   // ── Page title ────────────────────────────────────────────────────────
-  useEffect(() => {
-    const m = Math.floor(time / 60);
-    const s = (time % 60).toString().padStart(2, '0');
+  const updateTitle = () => {
+    const remaining = endTime ? Math.max(0, Math.round((endTime - Date.now()) / 1000)) : time;
+    const m = Math.floor(remaining / 60);
+    const s = (remaining % 60).toString().padStart(2, '0');
     document.title = `${m}:${s}`;
-  }, [time]);
+  };
+
+  useEffect(() => { updateTitle(); }, [time]);
+
+  // Snap title to correct value when tab becomes visible again (Chrome throttles
+  // background timers, so the displayed time can lag while the tab is hidden).
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === 'visible') updateTitle(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [endTime, time]);
 
   // ── Body background ───────────────────────────────────────────────────
   useEffect(() => {
@@ -124,6 +135,48 @@ export default function HomePage() {
   // ── Notification permission ───────────────────────────────────────────
   useEffect(() => {
     if (window.Notification?.permission === 'default') Notification.requestPermission();
+  }, []);
+
+  // ── Log session + reset on page close/refresh ─────────────────────────
+  // Ref is reassigned every render so handler always closes over fresh state.
+  const onPageCloseRef = useRef(null);
+  onPageCloseRef.current = () => {
+    if (!isRunning || !sessionStart) return;
+    const workedSecs = Math.round(
+      accumulatedSecsRef.current +
+      (resumeTimeRef.current ? (Date.now() - resumeTimeRef.current) / 1000 : 0)
+    );
+    if (workedSecs > 0) {
+      try {
+        const sessions = JSON.parse(localStorage.getItem('sessions')) || [];
+        sessions.push({
+          start: sessionStart,
+          end: Date.now(),
+          duration: workedSecs,
+          dayOfWeek: new Date(sessionStart).getDay(),
+          category,
+          endType: 'close',
+        });
+        localStorage.setItem('sessions', JSON.stringify(sessions));
+      } catch {}
+    }
+    // Reset so the page comes back paused at the original set time.
+    try {
+      const s = getSavedTimer();
+      localStorage.setItem('timerState', JSON.stringify({
+        ...s,
+        time: s.lastSetTime ?? 30 * 60,
+        isRunning: false,
+        endTime: null,
+        sessionStart: null,
+      }));
+    } catch {}
+  };
+
+  useEffect(() => {
+    const handler = () => onPageCloseRef.current?.();
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
   }, []);
 
   // ── Countdown ─────────────────────────────────────────────────────────
