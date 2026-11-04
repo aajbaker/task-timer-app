@@ -6,10 +6,11 @@ import { getContrastColor } from './utils';
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DAY_ABBR = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+const WEEKDAYS = [1, 2, 3, 4, 5];
 
 // Goals saved before day selection existed have no `days` (and may use 'monFri').
 const goalDays = (goal) =>
-  goal.days ?? (goal.mode === 'monFri' ? [1, 2, 3, 4, 5] : ALL_DAYS);
+  goal.days ?? (goal.mode === 'monFri' ? WEEKDAYS : ALL_DAYS);
 
 const daysLabel = (days) => {
   const key = days.join(',');
@@ -111,7 +112,7 @@ export default function StatsPage() {
   const [goalMode, setGoalMode] = useState('total');
   const [goalCategory, setGoalCategory] = useState('Any');
   const [goalValue, setGoalValue] = useState('');
-  const [goalDaysSel, setGoalDaysSel] = useState(ALL_DAYS);
+  const [goalDaysSel, setGoalDaysSel] = useState(WEEKDAYS);
   const [showGoalForm, setShowGoalForm] = useState(false);
 
   const toggleGoalDay = (d) =>
@@ -122,7 +123,7 @@ export default function StatsPage() {
   const closeGoalForm = () => {
     setShowGoalForm(false);
     setGoalValue('');
-    setGoalDaysSel(ALL_DAYS);
+    setGoalDaysSel(WEEKDAYS);
   };
 
   // Persist goals

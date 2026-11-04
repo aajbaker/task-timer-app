@@ -404,12 +404,12 @@ body, #root {
 }
 
 .day-toggle:hover {
-  border-color: #1976d2;
+  border-color: #444;
 }
 
 .day-toggle.on {
-  background: #1976d2;
-  border-color: #1976d2;
+  background: #444;
+  border-color: #444;
   color: #fff;
 }
 
