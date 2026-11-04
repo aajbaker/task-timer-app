@@ -4,6 +4,26 @@ import { useCategories, useSessions } from './AppContext';
 import { getContrastColor } from './utils';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAY_ABBR = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+
+// Goals saved before day selection existed have no `days` (and may use 'monFri').
+const goalDays = (goal) =>
+  goal.days ?? (goal.mode === 'monFri' ? [1, 2, 3, 4, 5] : ALL_DAYS);
+
+const daysLabel = (days) => {
+  const key = days.join(',');
+  if (key === '1,2,3,4,5') return 'Mon–Fri';
+  if (key === '0,6') return 'weekends';
+  return days.map(d => DAYS[d]).join(', ');
+};
+
+const goalModeLabel = (goal) => {
+  const days = goalDays(goal);
+  const all = days.length === 7;
+  if (goal.mode === 'total') return all ? 'total this week' : `total on ${daysLabel(days)}`;
+  return all ? 'every day' : `on ${daysLabel(days)}`;
+};
 
 export default function StatsPage() {
   const { categories, getCategoryColor, activeCategory } = useCategories();
@@ -51,11 +71,17 @@ export default function StatsPage() {
     }, 0);
   }, [gridData]);
 
-  const maxHours = Math.max(2, Math.ceil(maxDaySeconds / 3600));
-  const hours = Array.from({ length: maxHours + 1 }, (_, i) => i);
-  const Y_STEP = 60;
+  // Y axis tops out at 1h unless some day exceeds it. The plot never gets
+  // shorter than MIN_PLOT_H; past 2h it grows by 60px per extra hour.
+  const maxHours = Math.max(1, Math.ceil(maxDaySeconds / 3600));
+  const MIN_PLOT_H = 120;
+  const pxPerHour = Math.max(60, MIN_PLOT_H / maxHours);
+  const plotH = maxHours * pxPerHour;
+  const tickStep = maxHours === 1 ? 0.5 : 1;
+  const ticks = Array.from({ length: maxHours / tickStep + 1 }, (_, i) => i * tickStep);
   const Y_BASE = 36;
-  const svgHeight = Y_BASE + hours.length * Y_STEP + 32;
+  const yBottom = Y_BASE + plotH;
+  const svgHeight = yBottom + 92;
 
   // ── CSV export ────────────────────────────────────────────────────────
   const downloadCSV = () => {
@@ -85,7 +111,19 @@ export default function StatsPage() {
   const [goalMode, setGoalMode] = useState('total');
   const [goalCategory, setGoalCategory] = useState('Any');
   const [goalValue, setGoalValue] = useState('');
+  const [goalDaysSel, setGoalDaysSel] = useState(ALL_DAYS);
   const [showGoalForm, setShowGoalForm] = useState(false);
+
+  const toggleGoalDay = (d) =>
+    setGoalDaysSel(prev =>
+      prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d].sort((a, b) => a - b)
+    );
+
+  const closeGoalForm = () => {
+    setShowGoalForm(false);
+    setGoalValue('');
+    setGoalDaysSel(ALL_DAYS);
+  };
 
   // Persist goals
   useEffect(() => {
@@ -98,25 +136,24 @@ export default function StatsPage() {
         ? Object.values(catMap).reduce((a, b) => a + b, 0)
         : (catMap[goal.category] || 0);
 
+    const days = goalDays(goal);
     if (goal.mode === 'total') {
-      const total = gridData.reduce((acc, catMap) => acc + sumDay(catMap), 0);
+      const total = days.reduce((acc, i) => acc + sumDay(gridData[i] || {}), 0);
       return { value: total / 3600, percent: Math.min(1, total / (goal.value * 3600)) };
     }
-    const daysRange = goal.mode === 'monFri' ? [1, 2, 3, 4, 5] : [0, 1, 2, 3, 4, 5, 6];
-    const met = daysRange.filter(i => sumDay(gridData[i] || {}) >= goal.value * 3600).length;
-    return { value: met, percent: Math.min(1, met / daysRange.length) };
+    const met = days.filter(i => sumDay(gridData[i] || {}) >= goal.value * 3600).length;
+    return { value: met, percent: Math.min(1, met / days.length) };
   };
 
   const handleAddGoal = (e) => {
     e.preventDefault();
-    if (!goalValue) return;
-    setGoals(prev => [...prev, { mode: goalMode, category: goalCategory, value: Number(goalValue) }]);
-    setGoalValue('');
-    setShowGoalForm(false);
+    if (!goalValue || goalDaysSel.length === 0) return;
+    setGoals(prev => [
+      ...prev,
+      { mode: goalMode, category: goalCategory, value: Number(goalValue), days: goalDaysSel },
+    ]);
+    closeGoalForm();
   };
-
-  const goalModeLabel = (mode) =>
-    mode === 'total' ? 'total this week' : mode === 'perDay' ? 'every day' : 'Mon–Fri';
 
   return (
     <div className="stats-page" style={{ background: bgColor }}>
@@ -143,8 +180,8 @@ export default function StatsPage() {
               style={{ width: '100%', height: 'auto', display: 'block' }}
             >
               {/* Horizontal grid + y-axis labels */}
-              {hours.map((h, i) => {
-                const y = Y_BASE + (hours.length - 1 - i) * Y_STEP;
+              {ticks.map(h => {
+                const y = yBottom - h * pxPerHour;
                 return (
                   <g key={h}>
                     <text x={30} y={y + 4} fontSize={13} fill="#aaa" textAnchor="end">{h}</text>
@@ -159,7 +196,7 @@ export default function StatsPage() {
                 const isToday = i === new Date().getDay();
                 return (
                   <g key={d}>
-                    <line x1={x} x2={x} y1={Y_BASE} y2={Y_BASE + (hours.length - 1) * Y_STEP} stroke="#f0f0f0" strokeWidth={1} />
+                    <line x1={x} x2={x} y1={Y_BASE} y2={yBottom} stroke="#f0f0f0" strokeWidth={1} />
                     <text x={x} y={svgHeight - 6} fontSize={13} fill={isToday ? '#1976d2' : '#aaa'} textAnchor="middle" fontWeight={isToday ? '700' : '400'}>
                       {d}
                     </text>
@@ -174,9 +211,9 @@ export default function StatsPage() {
                 const totalSecs = Object.values(catMap).reduce((a, b) => a + b, 0);
                 if (!totalSecs) return null;
                 const sorted = Object.entries(catMap).sort((a, b) => b[1] - a[1]);
-                let yAcc = Y_BASE + (hours.length - 1) * Y_STEP;
+                let yAcc = yBottom;
                 return sorted.map(([cat, secs]) => {
-                  const barH = Math.min((secs / 3600) * Y_STEP, (hours.length - 0.1) * Y_STEP);
+                  const barH = (secs / 3600) * pxPerHour;
                   yAcc -= barH;
                   const rect = (
                     <rect key={cat + dayIdx} x={x - 20} y={yAcc} width={40} height={barH} fill={getCategoryColor(cat)} rx={6} opacity={0.92}>
@@ -224,19 +261,38 @@ export default function StatsPage() {
             />
             <label>hours</label>
             <select value={goalMode} onChange={e => setGoalMode(e.target.value)}>
-              <option value="total">total this week</option>
-              <option value="perDay">every day</option>
-              <option value="monFri">Mon–Fri</option>
+              <option value="total">total</option>
+              <option value="perDay">each day</option>
             </select>
             <label>in</label>
             <select value={goalCategory} onChange={e => setGoalCategory(e.target.value)}>
               <option value="Any">All Categories</option>
               {categories.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
             </select>
-            <button type="submit" className="btn btn-primary">Add</button>
-            <button type="button" className="btn btn-ghost" onClick={() => { setShowGoalForm(false); setGoalValue(''); }}>
-              Cancel
-            </button>
+            <div className="day-picker" role="group" aria-label="Days">
+              <label>on</label>
+              {DAY_ABBR.map((abbr, d) => {
+                const on = goalDaysSel.includes(d);
+                return (
+                  <button
+                    key={abbr}
+                    type="button"
+                    className={`day-toggle${on ? ' on' : ''}`}
+                    aria-pressed={on}
+                    title={DAYS[d]}
+                    onClick={() => toggleGoalDay(d)}
+                  >
+                    {abbr}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="goal-form-actions">
+              <button type="submit" className="btn btn-primary" disabled={goalDaysSel.length === 0}>Add</button>
+              <button type="button" className="btn btn-ghost" onClick={closeGoalForm}>
+                Cancel
+              </button>
+            </div>
           </form>
         )}
 
@@ -246,12 +302,12 @@ export default function StatsPage() {
             const progress = getGoalProgress(goal);
             const catColor = goal.category !== 'Any' ? getCategoryColor(goal.category) : '#1976d2';
             const barColor = progress.percent >= 1 ? '#388e3c' : catColor;
-            const daysTotal = goal.mode === 'monFri' ? 5 : 7;
+            const daysTotal = goalDays(goal).length;
             return (
               <div key={idx} className="goal-item">
                 <button className="goal-remove" onClick={() => setGoals(prev => prev.filter((_, i) => i !== idx))} title="Remove">×</button>
                 <div className="goal-label">
-                  At least <strong>{goal.value}h</strong> {goalModeLabel(goal.mode)} in{' '}
+                  At least <strong>{goal.value}h</strong> {goalModeLabel(goal)} in{' '}
                   {goal.category === 'Any' ? 'all categories' : (
                     <span
                       className="cat-pill-inline"
@@ -260,7 +316,6 @@ export default function StatsPage() {
                       {goal.category}
                     </span>
                   )}
-                  {goal.mode !== 'total' && ` — ${progress.value}/${daysTotal} days`}
                 </div>
                 <div className="goal-bar-track">
                   <div className="goal-bar-fill" style={{ width: `${progress.percent * 100}%`, background: barColor }} />
